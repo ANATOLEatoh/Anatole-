@@ -1,0 +1,87 @@
+import MetaTrader5 as mt5
+import pandas as pd
+import time
+
+# Initialize connection to MetaTrader 5
+if not mt5.initialize():
+    print("initialize() failed, error code =", mt5.last_error())
+    quit()
+
+# Define symbol and strategy parameters
+symbol = "AAPL"  # Example stock, ensure it's available on IC Markets
+timeframe = mt5.TIMEFRAME_M15  # 15-minute timeframe
+short_window = 10  # Short moving average window (in periods)
+long_window = 30   # Long moving average window (in periods)
+lot_size = 0.1     # Lot size for trading
+
+# Function to fetch historical data
+def fetch_data(symbol, timeframe, num_bars):
+    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, num_bars)
+    df = pd.DataFrame(rates)
+    df['time'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('time', inplace=True)
+    return df
+
+# Function to implement trading logic
+def trading_logic(df):
+    df['SMA_short'] = df['close'].rolling(window=short_window).mean()
+    df['SMA_long'] = df['close'].rolling(window=long_window).mean()
+
+    # Signal generation
+    df['signal'] = 0
+    df['signal'][short_window:] = \
+        df['SMA_short'][short_window:] > df['SMA_long'][short_window:]
+    df['position'] = df['signal'].diff()
+
+    return df
+
+# Function to place orders
+def place_order(symbol, lot, order_type):
+    point = mt5.symbol_info(symbol).point
+    price = mt5.symbol_info_tick(symbol).ask if order_type == "buy" else mt5.symbol_info_tick(symbol).bid
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": lot,
+        "type": mt5.ORDER_TYPE_BUY if order_type == "buy" else mt5.ORDER_TYPE_SELL,
+        "price": price,
+        "deviation": 10,
+        "magic": 234000,
+        "comment": "Python script order",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+
+    result = mt5.order_send(request)
+    return result
+
+# Trading Bot Function
+def run_bot():
+    while True:
+        # Fetch historical data
+        df = fetch_data(symbol, timeframe, long_window + 1)
+        
+        # Apply trading logic
+        df = trading_logic(df)
+        
+        # Check for buy signal
+        if df['position'].iloc[-1] == 1:
+            print("Buy signal detected")
+            place_order(symbol, lot_size, 'buy')
+        
+        # Check for sell signal
+        elif df['position'].iloc[-1] == -1:
+            print("Sell signal detected")
+            place_order(symbol, lot_size, 'sell')
+        
+        # Wait for the next 15 minutes
+        time.sleep(900)
+
+# Run the bot
+try:
+    run_bot()
+except Exception as e:
+    print(f"An error occurred: {e}")
+finally:
+    mt5.shutdown()
